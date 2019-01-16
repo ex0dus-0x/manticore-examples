@@ -16,9 +16,62 @@ uc_mcore.py
 import os.path
 import argparse
 
+import cffi
+import pycparser
+
+from pycparser import c_ast
+from manticore import issymbolic
 from manticore.core.smtlib import operators
 from manticore.native import Manticore
 from manticore.native.cpu import abstractcpu
+
+class FuncGenAST(c_ast.NodeVisitor):
+
+    def __init__(self, funcname):
+        self.funcname = funcname
+        self.parse_tree = {}
+
+
+    def visit_FuncCall(self, node):
+        """ generate parse tree with funcname 
+        and argtypes """
+
+        param_list = []
+        for params in (node.decl.type.args.params):
+            # check if type is pointer declaration
+            if type(params.type) == c_ast.PtrDecl:
+                ptype = params.type.type.type.names
+            elif type(params.type.type) == c_ast.IdentifierType:
+                ptype = params.type.type.type.names
+
+            # TODO: type-check and store as appropriate cffi type
+            print(ptype)
+            param_list.append(ptype)
+
+        # append to parse tree
+        self.parse_tree[node.decl.name] = param_list
+
+
+def generate_parse_tree(filename, func):
+    """ concretely retrieves function declarations throughout
+    binary """
+
+    ast = pycparser.parse_file(filename, use_cpp=False)
+    v = FuncGenAST(func)
+    v.visit(ast)
+    return v.parse_tree
+
+
+def call_ffi(lib, funcname, args):
+    """ safe wrapper to calling C through FFI """
+    
+    func = lib.__getattr__(funcname)
+    
+    # TODO: other error-checking stuff
+    # TODO: init argtypes
+   
+    lib.func()
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -41,7 +94,12 @@ def main():
     m.context['trace'] = []
     m.context['sym'] = ""
     m.context['funcs'] = {}
-
+ 
+    # initialize FFI through shared object, assumes shared object in pwd
+    ffi = cffi.FFI()
+    obj = args.binary + ".so" 
+    obj_path = os.path.dirname(os.path.abspath(__file__)) + os.path.sep + obj
+    lib = ffi.dlopen(obj_path)
 
     with m.locked_context() as context:
         # generate parse tree for functions in source
@@ -100,6 +158,8 @@ def main():
             #state.cpu.write_bytes(context['rdi'], rdi_buf)
             state.cpu.write_bytes(context['rsi'], rsi_buf)
 
+
+    # TODO: add concrete model as callback for concrete hook injection
 
     # run manticore
     m.verbosity(args.verbosity)
